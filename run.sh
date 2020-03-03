@@ -1,4 +1,5 @@
 #!/bin/bash
+rm karman.bin
 rm output
 sbatch submit.sbatch
 

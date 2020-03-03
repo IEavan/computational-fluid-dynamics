@@ -8,6 +8,7 @@
 #include "datadef.h"
 #include "init.h"
 #include "simulation.h"
+#include "mpi.h"
 
 void write_bin(float **u, float **v, float **p, char **flag,
      int imax, int jmax, float xlength, float ylength, char *file);
@@ -46,6 +47,12 @@ static struct option long_opts[] = {
 
 int main(int argc, char *argv[])
 {
+    // MPI Initialisation
+    int rank, size;
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
     int verbose = 1;          /* Verbosity level */
     float xlength = 22.0;     /* Width of simulated domain */
     float ylength = 4.1;      /* Height of simulated domain */
@@ -185,7 +192,7 @@ int main(int argc, char *argv[])
 
         if (ifluid > 0) {
             itersor = poisson(p, rhs, flag, imax, jmax, delx, dely,
-                        eps, itermax, omega, &res, ifluid);
+                        eps, itermax, omega, &res, ifluid, rank, size);
         } else {
             itersor = 0;
         }
@@ -212,6 +219,7 @@ int main(int argc, char *argv[])
     free_matrix(rhs);
     free_matrix(flag);
 
+    MPI_Finalize();
     printf("DONE\n");
     return 0;
 }

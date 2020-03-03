@@ -3,6 +3,7 @@
 #include <math.h>
 #include "datadef.h"
 #include "init.h"
+#include "mpi.h"
 
 #define max(x,y) ((x)>(y)?(x):(y))
 #define min(x,y) ((x)<(y)?(x):(y))
@@ -102,7 +103,7 @@ void compute_rhs(float **f, float **g, float **rhs, char **flag, int imax,
 /* Red/Black SOR to solve the poisson equation */
 int poisson(float **p, float **rhs, char **flag, int imax, int jmax,
     float delx, float dely, float eps, int itermax, float omega,
-    float *res, int ifull)
+    float *res, int ifull, int rank, int size)
 {
     int i, j, iter;
     float add, beta_2, beta_mod;
@@ -114,12 +115,27 @@ int poisson(float **p, float **rhs, char **flag, int imax, int jmax,
     float rdy2 = 1.0/(dely*dely);
     beta_2 = -omega/(2.0*(rdx2+rdy2));
 
+    // Divide p between ranks
+    // istart is inclusive and iend is exclusive
+    int p_istart, p_iend;
+    int p_iwidth = (imax + 2) / size;
+
+    if (rank != size - 1) {
+        p_istart = rank * p_iwidth;
+        p_iend = (rank + 1) * p_iwidth;
+    } else {
+        p_istart = (size - 1) * p_iwidth;
+        p_iend = imax + 2;
+    }
+
+    float partial_sum = 0.0;
     /* Calculate sum of squares */
-    for (i = 1; i <= imax; i++) {
+    for (i = max(p_istart, 1); i <= min(p_iend, imax); i++) {
         for (j=1; j<=jmax; j++) {
-            if (flag[i][j] & C_F) { p0 += p[i][j]*p[i][j]; }
+            if (flag[i][j] & C_F) { partial_sum += p[i][j]*p[i][j]; }
         }
     }
+    MPI_Allreduce(&partial_sum, &p0, 1, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
    
     p0 = sqrt(p0/ifull);
     if (p0 < 0.0001) { p0 = 1.0; }
