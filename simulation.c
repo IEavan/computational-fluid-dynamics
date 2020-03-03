@@ -118,7 +118,7 @@ int poisson(float **p, float **rhs, char **flag, int imax, int jmax,
     // Divide p between ranks
     // istart is inclusive and iend is exclusive
     int p_istart, p_iend;
-    int p_iwidth = (imax + 2) / size;
+    int p_iwidth = (imax + 2) / rank;
 
     if (rank != size - 1) {
         p_istart = rank * p_iwidth;
@@ -143,8 +143,22 @@ int poisson(float **p, float **rhs, char **flag, int imax, int jmax,
     /* Red/Black SOR-iteration */
     for (iter = 0; iter < itermax; iter++) {
         for (rb = 0; rb <= 1; rb++) {
-            for (i = 1; i <= imax; i++) {
+            for (i = max(1, p_istart); i <= min(imax, p_iend); i++) {
                 for (j = 1; j <= jmax; j++) {
+                    // MPI communication
+                    // float *left_boundary = malloc(sizeof(float) * jmax + 2);
+                    // float *right_boundary = malloc(sizeof(float) * jmax + 2);
+
+                    // if (rank == 0) {
+                    //     MPI_Send(&p[p_iend - 1], jmax + 2, MPI_FLOAT, rank - 1, 0, MPI_COMM_WORLD);
+                    // } else if (rank == size - 1) {
+                    //     MPI_Send(&p[p_istart], jmax + 2, MPI_FLOAT, rank - 1, 1, MPI_COMM_WORLD);
+                    // } else {
+                    //     MPI_Send(&p[p_iend - 1], jmax + 2, MPI_FLOAT, rank - 1, 0, MPI_COMM_WORLD);
+                    //     MPI_Send(&p[p_istart], jmax + 2, MPI_FLOAT, rank - 1, 1, MPI_COMM_WORLD);
+                    // }
+
+
                     if ((i+j) % 2 != rb) { continue; }
                     if (flag[i][j] == (C_F | B_NSEW)) {
                         /* five point star for interior fluid cells */
