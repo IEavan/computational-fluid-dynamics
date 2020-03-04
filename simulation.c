@@ -3,6 +3,7 @@
 #include <math.h>
 #include "datadef.h"
 #include "init.h"
+#include "alloc.h"
 #include "mpi.h"
 
 #define max(x,y) ((x)>(y)?(x):(y))
@@ -100,6 +101,30 @@ void compute_rhs(float **f, float **g, float **rhs, char **flag, int imax,
 }
 
 
+void communicate_1d(float **p, int imax, int jmax, int p_istart, int p_iend, int rank, int size)
+{
+    // MPI communication
+    if (size == 1) {return;}
+    if (rank == 0) {
+        // printf("Sending Columns %d and receiving %d from process %d of %d\n", p_iend - 1, p_iend, rank, size);
+        MPI_Send(p[p_iend - 1], jmax + 2, MPI_FLOAT, rank + 1, 0, MPI_COMM_WORLD);
+        MPI_Recv(p[p_iend], jmax + 2, MPI_FLOAT, rank + 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    } else if (rank == size - 1) {
+        // printf("Sending Columns %d and receiving %d from process %d of %d\n", p_istart, p_istart - 1, rank, size);
+        MPI_Send(p[p_istart], jmax + 2, MPI_FLOAT, rank - 1, 1, MPI_COMM_WORLD);
+        MPI_Recv(p[p_istart - 1], jmax + 2, MPI_FLOAT, rank - 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    } else {
+        // printf("Sending Columns %d and %d and receiving %d and %d from process %d of %d\n", p_iend - 1, p_istart, p_iend, p_istart - 1, rank, size);
+        MPI_Send(p[p_iend - 1], jmax + 2, MPI_FLOAT, rank + 1, 0, MPI_COMM_WORLD);
+        MPI_Send(p[p_istart], jmax + 2, MPI_FLOAT, rank - 1, 1, MPI_COMM_WORLD);
+
+        MPI_Recv(p[p_iend], jmax + 2, MPI_FLOAT, rank + 1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(p[p_istart - 1], jmax + 2, MPI_FLOAT, rank - 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+}
+
+
 /* Red/Black SOR to solve the poisson equation */
 int poisson(float **p, float **rhs, char **flag, int imax, int jmax,
     float delx, float dely, float eps, int itermax, float omega,
@@ -108,17 +133,14 @@ int poisson(float **p, float **rhs, char **flag, int imax, int jmax,
     int i, j, iter;
     float add, beta_2, beta_mod;
     float p0 = 0.0;
+    float local_residual = 0.0;
     
     int rb; /* Red-black value. */
-
-    float rdx2 = 1.0/(delx*delx);
-    float rdy2 = 1.0/(dely*dely);
-    beta_2 = -omega/(2.0*(rdx2+rdy2));
-
+    
     // Divide p between ranks
     // istart is inclusive and iend is exclusive
     int p_istart, p_iend;
-    int p_iwidth = (imax + 2) / rank;
+    int p_iwidth = (imax + 2) / size;
 
     if (rank != size - 1) {
         p_istart = rank * p_iwidth;
@@ -127,10 +149,22 @@ int poisson(float **p, float **rhs, char **flag, int imax, int jmax,
         p_istart = (size - 1) * p_iwidth;
         p_iend = imax + 2;
     }
+    float **p_copy = alloc_floatmatrix(imax + 2, jmax + 2);
+    memcpy(p_copy[0], p[0], (imax + 2) * (jmax + 2));
+
+    // check copy
+    // printf("copy: %f || original: %f\n", p[5][5], p_copy[5][5]);
+    // printf("copy: %f || original: %f\n", p[2][9], p_copy[2][9]);
+    // printf("copy: %f || original: %f\n", p[7][3], p_copy[7][3]);
+
+    float rdx2 = 1.0/(delx*delx);
+    float rdy2 = 1.0/(dely*dely);
+    beta_2 = -omega/(2.0*(rdx2+rdy2));
 
     float partial_sum = 0.0;
     /* Calculate sum of squares */
-    for (i = max(p_istart, 1); i <= min(p_iend, imax); i++) {
+    for (i = max(p_istart, 1); i <= min(p_iend - 1, imax); i++) {
+    //for (i = 1; i <= imax; i++) {
         for (j=1; j<=jmax; j++) {
             if (flag[i][j] & C_F) { partial_sum += p[i][j]*p[i][j]; }
         }
@@ -139,25 +173,14 @@ int poisson(float **p, float **rhs, char **flag, int imax, int jmax,
    
     p0 = sqrt(p0/ifull);
     if (p0 < 0.0001) { p0 = 1.0; }
+    printf("p0: %f in process %d || ", p0, rank);
 
     /* Red/Black SOR-iteration */
     for (iter = 0; iter < itermax; iter++) {
         for (rb = 0; rb <= 1; rb++) {
-            for (i = max(1, p_istart); i <= min(imax, p_iend); i++) {
+            // for (i = max(1, p_istart); i <= min(imax, p_iend - 1); i++) {
+            for (i = 1; i <= imax; i++) {
                 for (j = 1; j <= jmax; j++) {
-                    // MPI communication
-                    // float *left_boundary = malloc(sizeof(float) * jmax + 2);
-                    // float *right_boundary = malloc(sizeof(float) * jmax + 2);
-
-                    // if (rank == 0) {
-                    //     MPI_Send(&p[p_iend - 1], jmax + 2, MPI_FLOAT, rank - 1, 0, MPI_COMM_WORLD);
-                    // } else if (rank == size - 1) {
-                    //     MPI_Send(&p[p_istart], jmax + 2, MPI_FLOAT, rank - 1, 1, MPI_COMM_WORLD);
-                    // } else {
-                    //     MPI_Send(&p[p_iend - 1], jmax + 2, MPI_FLOAT, rank - 1, 0, MPI_COMM_WORLD);
-                    //     MPI_Send(&p[p_istart], jmax + 2, MPI_FLOAT, rank - 1, 1, MPI_COMM_WORLD);
-                    // }
-
 
                     if ((i+j) % 2 != rb) { continue; }
                     if (flag[i][j] == (C_F | B_NSEW)) {
@@ -180,11 +203,68 @@ int poisson(float **p, float **rhs, char **flag, int imax, int jmax,
                     }
                 } /* end of j */
             } /* end of i */
+            // communicate_1d(p, imax, jmax, p_istart, p_iend, rank, size);
         } /* end of rb */
+        
+        // Parallel execution with the copy
+        for (rb = 0; rb <= 1; rb++) {
+            for (i = max(1, p_istart); i <= min(imax, p_iend - 1); i++) {
+                for (j = 1; j <= jmax; j++) {
+
+                    if ((i+j) % 2 != rb) { continue; }
+                    if (flag[i][j] == (C_F | B_NSEW)) {
+                        /* five point star for interior fluid cells */
+                        p_copy[i][j] = (1.-omega)*p_copy[i][j] - 
+                              beta_2*(
+                                    (p_copy[i+1][j]+p_copy[i-1][j])*rdx2
+                                  + (p_copy[i][j+1]+p_copy[i][j-1])*rdy2
+                                  -  rhs[i][j]
+                              );
+                    } else if (flag[i][j] & C_F) { 
+                        /* modified star near boundary */
+                        beta_mod = -omega/((eps_E+eps_W)*rdx2+(eps_N+eps_S)*rdy2);
+                        p_copy[i][j] = (1.-omega)*p_copy[i][j] -
+                            beta_mod*(
+                                  (eps_E*p_copy[i+1][j]+eps_W*p_copy[i-1][j])*rdx2
+                                + (eps_N*p_copy[i][j+1]+eps_S*p_copy[i][j-1])*rdy2
+                                - rhs[i][j]
+                            );
+                    }
+                } /* end of j */
+            } /* end of i */
+            communicate_1d(p_copy, imax, jmax, p_istart, p_iend, rank, size);
+        } /* end of rb */
+
+
+        // Check differences
+        float total_error = 0.0;
+        for (i = p_istart; i < p_iend; i++) {
+            for (j = 0; j < jmax + 2; j++) {
+                float err = p_copy[i][j] - p[i][j];
+                total_error += err * err;
+            }
+        }
+        printf("Total Square Error %f in process %d\n", total_error, rank);
+
+        // Check all fails for rank 0
+        if (rank == 0) {
+            for (i = p_istart; i < p_iend; i++) {
+                for (j = 0; j < jmax + 2; j++) {
+                    float err = p_copy[i][j] - p[i][j];
+                    if (err < 0.0001 && err > -0.0001) {continue;}
+                    else {
+                        printf("Break at i = %d, j = %d, off_by = %f\n", i, j, err);
+                    }
+                }
+            }
+        }
+
         
         /* Partial computation of residual */
         *res = 0.0;
-        for (i = 1; i <= imax; i++) {
+        local_residual = 0.0;
+        for (i = max(1, p_istart); i <= min(imax, p_iend - 1); i++) {
+        //for (i = 1; i <= imax; i++) {
             for (j = 1; j <= jmax; j++) {
                 if (flag[i][j] & C_F) {
                     /* only fluid cells */
@@ -192,10 +272,11 @@ int poisson(float **p, float **rhs, char **flag, int imax, int jmax,
                         eps_W*(p[i][j]-p[i-1][j])) * rdx2  +
                         (eps_N*(p[i][j+1]-p[i][j]) -
                         eps_S*(p[i][j]-p[i][j-1])) * rdy2  -  rhs[i][j];
-                    *res += add*add;
+                    local_residual += add*add;
                 }
             }
         }
+        MPI_Allreduce(&local_residual, res, 1, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
         *res = sqrt((*res)/ifull)/p0;
 
         /* convergence? */
@@ -204,7 +285,6 @@ int poisson(float **p, float **rhs, char **flag, int imax, int jmax,
 
     return iter;
 }
-
 
 /* Update the velocity values based on the tentative
  * velocity values and the new pressure matrix

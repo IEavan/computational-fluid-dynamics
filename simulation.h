@@ -9,6 +9,9 @@ int poisson(float **p, float **rhs, char **flag, int imax, int jmax,
     float delx, float dely, float eps, int itermax, float omega,
     float *res, int ifull, int size, int rank);
 
+void communicate_1d(float **p, int imax, int jmax, int p_istart,
+    int p_iend, int rank, int size);
+
 void update_velocity(float **u, float **v, float **f, float **g, float **p,
     char **flag, int imax, int jmax, float del_t, float delx, float dely);
 
